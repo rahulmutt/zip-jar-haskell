@@ -1,6 +1,7 @@
 module Lib where
 
 import Codec.Archive.Zip (addEntry, CompressionMethod(Store), createArchive, mkEntrySelector, withArchive)
+import Control.Monad(forM_)
 import Control.Monad.IO.Class (MonadIO)
 import Control.Monad.Catch (MonadCatch, MonadThrow)
 import Data.ByteString.Internal (ByteString)
@@ -84,9 +85,73 @@ addByteStringToJar :: (MonadThrow m, MonadIO m)
   -> ByteString    -- ^ Contents of the new file to add
   -> FilePath      -- ^ Location of the jar to add the new file into
   -> m ()
+
 addByteStringToJar fileLocation contents jarLocation = zipAction
   where zipAction = jarPath >>= flip withArchive zipChange
         zipChange = entrySel >>= addEntry Store contents
         entrySel  = filePath >>= mkEntrySelector
         jarPath   = parseRelFile jarLocation
         filePath  = parseRelFile fileLocation
+
+-- | Adds the given files into the given jar. Each file is represented by a
+-- tuple containing the location where the file will be added inside the jar,
+-- and the contents of the file as a ByteString.
+--
+-- __Throws__: 'PathParseException', 'EntrySelectorException',
+-- isAlreadyInUseError, isDoesNotExistError, isPermissionError, 'ParsingFailed'
+--
+-- See 'withArchive', 'mkEntrySelector', and 'parseRelFile' for more information.
+--
+-- For example, running the following would create two files within the jar
+-- archive located at "build\/libs\/HelloWorld.jar". The first file would be
+-- named "Hello.class" containing the string "Hello, World!" within the
+-- "helloworld" directory in the jar archive. The second file would be named
+-- \"MANIFEST.MF" containing the string "Manifest-Version: 1.0" within the
+-- \"META-INF" directory in the jar archive.
+--
+-- @
+-- let file1Location = "helloworld\/Hello.class"
+-- let file1Contents = "Hello, World!"
+-- let file1 = (file1Location, file1Contents)
+--
+-- let file2Location = "META-INF\/MANIFEST.MF"
+-- let file2Contents = "Manifest-Version: 1.0"
+-- let file2 = (file2Location, file2Contents)
+--
+-- let files = [file1, file2]
+-- let jarLocation = "build\/libs\/HelloWorld.jar"
+-- addMultiByteStringsToJar files jarLocation
+-- @
+--
+-- __Before__
+--
+-- @
+-- .
+-- └── build
+--     └── libs
+--         └── HelloWorld.jar
+-- @
+--
+-- __After__
+--
+-- @
+-- .
+-- └── build
+--     └── libs
+--         └── HelloWorld.jar
+--             ├── helloworld
+--             │   └── Hello.class
+--             └── META-INF
+--                 └── MANIFEST.MF
+-- @
+addMultiByteStringsToJar :: (MonadThrow m, MonadIO m)
+  => [(FilePath, ByteString)]    -- ^ Filepaths and contents of files to add into the jar
+  -> FilePath                    -- ^ Location of the jar to add the new files into
+  -> m ()
+addMultiByteStringsToJar files jarLocation = do
+  jarPath <- parseRelFile jarLocation
+  withArchive jarPath $
+    forM_ files $ \(path, contents) -> do
+      filePath <- parseRelFile path
+      entrySel <- mkEntrySelector filePath
+      addEntry Store contents entrySel
